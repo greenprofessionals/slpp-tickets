@@ -83,7 +83,7 @@
 </style>
 <!-- QR generation (ticket) and QR scanning (check-in camera) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js" onerror="this.onerror=null;this.src='https://unpkg.com/jsqr@1.4.0/dist/jsQR.js';"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 </head>
 <body>
 
@@ -1232,6 +1232,52 @@ async function initBarcodeDetector() {
   }
 }
 
+let qrDecoderLoadPromise = null;
+
+function loadScriptWithTimeout(src, timeoutMs = 7000) {
+  return new Promise((resolve, reject) => {
+    const existing = Array.from(document.scripts).find(s => s.src === src);
+    if (existing && typeof jsQR !== 'undefined') { resolve(true); return; }
+    const script = existing || document.createElement('script');
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ok ? resolve(true) : reject(new Error('Failed to load ' + src));
+    };
+    script.onload = () => finish(typeof jsQR !== 'undefined');
+    script.onerror = () => finish(false);
+    if (!existing) {
+      script.src = src;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+    const timer = setTimeout(() => finish(typeof jsQR !== 'undefined'), timeoutMs);
+  });
+}
+
+async function ensureQrDecoder() {
+  if (typeof jsQR !== 'undefined') return true;
+  if (qrDecoderLoadPromise) return qrDecoderLoadPromise;
+  qrDecoderLoadPromise = (async () => {
+    const sources = [
+      new URL('jsQR.js', window.location.href).href,
+      'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
+      'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js',
+      'https://cdn.jsdelivr.net/gh/cozmo/jsQR@master/dist/jsQR.js'
+    ];
+    for (const src of sources) {
+      if (typeof jsQR !== 'undefined') return true;
+      try { await loadScriptWithTimeout(src); } catch (e) { /* try next source */ }
+    }
+    return typeof jsQR !== 'undefined';
+  })();
+  const ok = await qrDecoderLoadPromise;
+  if (!ok) qrDecoderLoadPromise = null;
+  return ok;
+}
+
 async function handleScannedCode(value) {
   const code = (value || '').trim();
   if (!code || scannerBusy) return;
@@ -1262,8 +1308,13 @@ async function startScanner() {
 
   barcodeDetector = await initBarcodeDetector();
   if (!barcodeDetector && typeof jsQR === 'undefined') {
-    scannerStatus.textContent = 'QR reader library did not load. Use “Scan from Photo” or type the ticket number.';
-    return;
+    scannerStatus.textContent = 'Loading QR reader…';
+    const decoderReady = await ensureQrDecoder();
+    if (!decoderReady) {
+      scannerStatus.textContent = 'QR reader could not load. Check your connection, then tap Scan QR Code again, or type the ticket number.';
+      return;
+    }
+    scannerStatus.textContent = 'Point the rear camera at the QR code and hold steady.';
   }
 
   try {
@@ -1342,6 +1393,14 @@ async function scanQrImageFile(file) {
   barcodeDetector = await initBarcodeDetector();
   scannerOverlay.style.display = 'flex';
   scannerStatus.textContent = 'Reading QR code from photo…';
+  if (!barcodeDetector && typeof jsQR === 'undefined') {
+    const decoderReady = await ensureQrDecoder();
+    if (!decoderReady) {
+      scannerStatus.textContent = 'QR reader could not load. Check your connection or type the ticket number.';
+      qrImageInput.value = '';
+      return;
+    }
+  }
   try {
     const img = new Image();
     const objectUrl = URL.createObjectURL(file);
