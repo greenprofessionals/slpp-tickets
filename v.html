@@ -520,7 +520,7 @@ async function renderTicket(tier, serial, checkInToken) {
   ctx.fillStyle = '#1a3fa0';
   ctx.font = '700 16px Segoe UI, sans-serif';
   ctx.fillText('📅 ' + formatDisplayDate(cfg.EventDate), textLeft, detailsY);
-  ctx.fillText('🕕 ' + (cfg.EventTime || ''), textLeft, detailsY + 35);
+  ctx.fillText('🕕 ' + formatDisplayTime(cfg.EventTime), textLeft, detailsY + 35);
   ctx.fillText('📍 ' + (cfg.VenueName || ''), textLeft, detailsY + 70);
 
   ctx.font = '400 14px Segoe UI, sans-serif';
@@ -598,6 +598,20 @@ function formatDisplayDate(value) {
       month: 'long',
       day: 'numeric'
     });
+  }
+  return raw;
+}
+
+function formatDisplayTime(value) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const m = raw.match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
+  if (m && /1899|GMT|Standard Time|Daylight Time/i.test(raw)) {
+    let h = Number(m[1]);
+    const min = m[2];
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${min} ${suffix}`;
   }
   return raw;
 }

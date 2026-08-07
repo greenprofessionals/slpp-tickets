@@ -844,20 +844,18 @@ async function renderTicket(tier, serial, checkInToken) {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
-    // No custom background photo configured — automatically fall back to
-    // a large, faint watermark of the chapter's OWN logo instead of empty
-    // space. This needs zero extra setup per chapter: it just reuses
-    // whatever LogoURL is already configured for the ticket's corner badge.
-    if (cfg.LogoURL) {
-      try {
-        const wm = await loadImage(cfg.LogoURL);
-        const wmSize = 420;
-        ctx.save();
-        ctx.globalAlpha = 0.09;
-        ctx.drawImage(wm, stubX / 2 - wmSize / 2, H / 2 - wmSize / 2, wmSize, wmSize);
-        ctx.restore();
-      } catch (e) { /* no logo yet, or it failed to load — plain gradient stays, which is fine */ }
-    }
+  }
+
+  // ---- Logo watermark: always draw the configured logo faintly behind content. ----
+  if (cfg.LogoURL) {
+    try {
+      const wm = await loadImage(cfg.LogoURL);
+      const wmSize = 420;
+      ctx.save();
+      ctx.globalAlpha = 0.08;
+      ctx.drawImage(wm, stubX / 2 - wmSize / 2, H / 2 - wmSize / 2, wmSize, wmSize);
+      ctx.restore();
+    } catch (e) { /* ticket remains usable if logo cannot load */ }
   }
 
   // ---- Outer gold frame ----
@@ -957,7 +955,7 @@ async function renderTicket(tier, serial, checkInToken) {
   ctx.fillStyle = '#1a3fa0';
   ctx.font = '700 16px Segoe UI, sans-serif';
   ctx.fillText('📅 ' + formatDisplayDate(cfg.EventDate), textLeft, detailsY);
-  ctx.fillText('🕕 ' + (cfg.EventTime || ''), textLeft, detailsY + 35);
+  ctx.fillText('🕕 ' + formatDisplayTime(cfg.EventTime), textLeft, detailsY + 35);
   ctx.fillText('📍 ' + (cfg.VenueName || ''), textLeft, detailsY + 70);
 
   ctx.font = '400 14px Segoe UI, sans-serif';
@@ -1054,6 +1052,20 @@ function formatDisplayDate(value) {
       month: 'long',
       day: 'numeric'
     });
+  }
+  return raw;
+}
+
+function formatDisplayTime(value) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const m = raw.match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
+  if (m && /1899|GMT|Standard Time|Daylight Time/i.test(raw)) {
+    let h = Number(m[1]);
+    const min = m[2];
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${min} ${suffix}`;
   }
   return raw;
 }
