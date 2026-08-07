@@ -49,6 +49,12 @@
   a.open-form-btn .arrow{ margin-left:6px; }
   .fine-print{ text-align:center; font-size:12px; color:#8a8a8a; margin-top:14px; }
   footer{ text-align:center; padding:24px 20px 40px; font-size:12px; color:rgba(250,247,239,.55); }
+
+  .upload-box{margin-top:24px;padding:18px;border:1px solid #c9a24b;border-radius:10px;background:#fffdf7;}
+  .upload-box label{display:block;font-size:13px;font-weight:700;color:#0b3d24;margin:10px 0 6px;}
+  .upload-box input{width:100%;padding:11px;border:1px solid #d8d2c2;border-radius:8px;background:#fff;font-size:14px;}
+  .upload-btn{width:100%;margin-top:12px;padding:13px;border:0;border-radius:8px;background:#0b3d24;color:white;font-weight:700;font-size:15px;cursor:pointer;}
+  .upload-status{display:none;margin-top:10px;padding:10px;border-radius:8px;font-size:13px;}
 </style>
 </head>
 <body>
@@ -79,10 +85,68 @@
       Open Configuration Form <span class="arrow">→</span>
     </a>
     <p class="fine-print">Opens in a new tab. Takes about 5 minutes to complete.</p>
+
+    <div class="upload-box">
+      <h2 style="margin-bottom:6px;">Optional Logo Upload</h2>
+      <p style="margin-top:0;font-size:13px;">Upload the chapter or event logo here. It will appear at the top-left of every ticket and as the large faint watermark in the ticket background.</p>
+      <label for="logoAdminPasscode">Admin passcode</label>
+      <input type="password" id="logoAdminPasscode" autocomplete="off" placeholder="Enter admin passcode">
+      <label for="logoFile">Logo image</label>
+      <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp">
+      <button type="button" class="upload-btn" id="uploadLogoBtn">Upload Logo</button>
+      <div class="upload-status" id="logoUploadStatus"></div>
+    </div>
   </div>
 </main>
 
 <footer>SLPP North America — New England Chapter</footer>
+
+
+<script>
+const CONFIG_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxcfrPorclAPXv0vCg0hBjxiWR8yUq43Hfhegrmt_HnX2otsvjMx1h9-JFYRCQ2qau2/exec';
+const uploadLogoBtn = document.getElementById('uploadLogoBtn');
+const logoUploadStatus = document.getElementById('logoUploadStatus');
+
+function setLogoStatus(message, ok) {
+  logoUploadStatus.textContent = message;
+  logoUploadStatus.style.display = 'block';
+  logoUploadStatus.style.background = ok ? '#eaf6ea' : '#fdeaea';
+  logoUploadStatus.style.color = ok ? '#155724' : '#8a1f1f';
+}
+
+uploadLogoBtn.addEventListener('click', async () => {
+  const passcode = document.getElementById('logoAdminPasscode').value.trim();
+  const file = document.getElementById('logoFile').files[0];
+  if (!passcode) { setLogoStatus('Enter the admin passcode.', false); return; }
+  if (!file) { setLogoStatus('Choose a logo image first.', false); return; }
+  if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) { setLogoStatus('Use a PNG, JPG/JPEG, or WebP image.', false); return; }
+  if (file.size > 2 * 1024 * 1024) { setLogoStatus('Logo must be smaller than 2 MB.', false); return; }
+
+  uploadLogoBtn.disabled = true;
+  uploadLogoBtn.textContent = 'Uploading…';
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const res = await fetch(CONFIG_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'uploadLogo', adminPasscode: passcode, fileName: file.name, dataUrl })
+    });
+    const data = await res.json();
+    if (!data.ok) { setLogoStatus(data.error || 'Logo upload failed.', false); return; }
+    setLogoStatus('✅ Logo uploaded. New tickets will use it automatically as the logo and watermark.', true);
+  } catch (e) {
+    setLogoStatus('Could not reach the ticket server. Make sure the latest Apps Script deployment is live.', false);
+  } finally {
+    uploadLogoBtn.disabled = false;
+    uploadLogoBtn.textContent = 'Upload Logo';
+  }
+});
+</script>
 
 </body>
 </html>

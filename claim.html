@@ -83,7 +83,7 @@
 </style>
 <!-- QR generation (ticket) and QR scanning (check-in camera) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js" onerror="this.onerror=null;this.src='https://unpkg.com/jsqr@1.4.0/dist/jsQR.js';"></script>
 </head>
 <body>
 
@@ -195,6 +195,8 @@
     <label for="checkInSerial">Ticket number</label>
     <input type="text" id="checkInSerial" placeholder="e.g. MA-007 or just 007">
     <button type="button" id="scanQrBtn" style="margin-top:10px;padding:10px 18px;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;font-weight:700;cursor:pointer;">📷 Scan QR Code</button>
+    <label for="qrImageInput" style="display:inline-block;margin:10px 0 0 8px;padding:10px 18px;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">🖼️ Scan from Photo</label>
+    <input type="file" id="qrImageInput" accept="image/*" style="display:none;">
 
     <div id="scannerOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:1000;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
       <video id="scannerVideo" playsinline autoplay muted style="width:100%;max-width:420px;border-radius:12px;background:#000;"></video>
@@ -1208,40 +1210,85 @@ generateBtn.addEventListener('click', async () => {
    user tap — this is wired to the Scan button's click, not on page load. */
 let scannerStream = null;
 let scannerRafId = null;
+let barcodeDetector = null;
+let scannerBusy = false;
 
 const scanQrBtn = document.getElementById('scanQrBtn');
+const qrImageInput = document.getElementById('qrImageInput');
 const scannerOverlay = document.getElementById('scannerOverlay');
 const scannerVideo = document.getElementById('scannerVideo');
 const scannerCanvas = document.getElementById('scannerCanvas');
 const scannerStatus = document.getElementById('scannerStatus');
 const scannerCloseBtn = document.getElementById('scannerCloseBtn');
 
+async function initBarcodeDetector() {
+  if (!('BarcodeDetector' in window)) return null;
+  try {
+    const formats = await BarcodeDetector.getSupportedFormats();
+    if (!formats.includes('qr_code')) return null;
+    return new BarcodeDetector({ formats: ['qr_code'] });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function handleScannedCode(value) {
+  const code = (value || '').trim();
+  if (!code || scannerBusy) return;
+  scannerBusy = true;
+  document.getElementById('checkInSerial').value = code;
+  scannerStatus.textContent = '✅ QR code read. Checking ticket…';
+  setTimeout(() => {
+    stopScanner();
+    scannerBusy = false;
+    const btn = document.getElementById('checkInSerialBtn');
+    if (btn && !btn.disabled) btn.click();
+  }, 450);
+}
+
 async function startScanner() {
-  scannerStatus.textContent = 'Point the camera at the ticket\'s QR code.';
+  scannerBusy = false;
+  scannerStatus.textContent = 'Point the rear camera at the QR code and hold steady.';
   scannerOverlay.style.display = 'flex';
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    scannerStatus.textContent = 'Camera access isn\'t supported in this browser. Type the ticket number instead.';
+  if (!window.isSecureContext) {
+    scannerStatus.textContent = 'Camera scanning requires HTTPS. Open the live GitHub Pages URL, not a downloaded/local copy.';
     return;
   }
-  if (typeof jsQR === 'undefined') {
-    scannerStatus.textContent = 'The QR scanner library didn\'t load (check your connection). Type the ticket number instead.';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    scannerStatus.textContent = 'Camera access is not available in this browser. Use “Scan from Photo” or type the ticket number.';
+    return;
+  }
+
+  barcodeDetector = await initBarcodeDetector();
+  if (!barcodeDetector && typeof jsQR === 'undefined') {
+    scannerStatus.textContent = 'QR reader library did not load. Use “Scan from Photo” or type the ticket number.';
     return;
   }
 
   try {
-    // Prefer the rear camera on phones; fall back to whatever's available
-    // (e.g. laptops with only a front camera) if that exact constraint fails.
+    const constraints = {
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    };
     try {
-      scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+      scannerStream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (e) {
-      scannerStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      scannerStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
     scannerVideo.srcObject = scannerStream;
+    await new Promise(resolve => {
+      if (scannerVideo.readyState >= 1) return resolve();
+      scannerVideo.onloadedmetadata = () => resolve();
+    });
     await scannerVideo.play();
     scannerRafId = requestAnimationFrame(scanFrame);
   } catch (err) {
-    scannerStatus.textContent = 'Could not access the camera (permission denied or unavailable). Type the ticket number instead.';
+    scannerStatus.textContent = 'Camera could not start. Allow camera permission in the browser, or use “Scan from Photo”.';
   }
 }
 
@@ -1256,27 +1303,76 @@ function stopScanner() {
   scannerOverlay.style.display = 'none';
 }
 
-function scanFrame() {
-  if (!scannerStream) return;
-  const ctx = scannerCanvas.getContext('2d');
-  if (scannerVideo.readyState === scannerVideo.HAVE_ENOUGH_DATA) {
-    scannerCanvas.width = scannerVideo.videoWidth;
-    scannerCanvas.height = scannerVideo.videoHeight;
+async function detectQrFromCanvas(canvasEl) {
+  if (barcodeDetector) {
+    try {
+      const codes = await barcodeDetector.detect(canvasEl);
+      if (codes && codes.length && codes[0].rawValue) return codes[0].rawValue;
+    } catch (e) { /* fall through to jsQR */ }
+  }
+  if (typeof jsQR !== 'undefined') {
+    const ctx = canvasEl.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+    if (code && code.data) return code.data;
+  }
+  return '';
+}
+
+async function scanFrame() {
+  if (!scannerStream || scannerBusy) return;
+  if (scannerVideo.readyState === scannerVideo.HAVE_ENOUGH_DATA && scannerVideo.videoWidth > 0) {
+    const ctx = scannerCanvas.getContext('2d', { willReadFrequently: true });
+    const maxWidth = 960;
+    const scale = Math.min(1, maxWidth / scannerVideo.videoWidth);
+    scannerCanvas.width = Math.round(scannerVideo.videoWidth * scale);
+    scannerCanvas.height = Math.round(scannerVideo.videoHeight * scale);
     ctx.drawImage(scannerVideo, 0, 0, scannerCanvas.width, scannerCanvas.height);
-    const imageData = ctx.getImageData(0, 0, scannerCanvas.width, scannerCanvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
-    if (code && code.data) {
-      scannerStatus.textContent = '✅ Scanned: ' + code.data;
-      document.getElementById('checkInSerial').value = code.data;
-      setTimeout(stopScanner, 600); // brief pause so the confirmation is visible before closing
+    const value = await detectQrFromCanvas(scannerCanvas);
+    if (value) {
+      await handleScannedCode(value);
       return;
     }
   }
   scannerRafId = requestAnimationFrame(scanFrame);
 }
 
+async function scanQrImageFile(file) {
+  if (!file) return;
+  barcodeDetector = await initBarcodeDetector();
+  scannerOverlay.style.display = 'flex';
+  scannerStatus.textContent = 'Reading QR code from photo…';
+  try {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+    const maxWidth = 1600;
+    const scale = Math.min(1, maxWidth / img.naturalWidth);
+    scannerCanvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    scannerCanvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = scannerCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, scannerCanvas.width, scannerCanvas.height);
+    URL.revokeObjectURL(objectUrl);
+    const value = await detectQrFromCanvas(scannerCanvas);
+    if (!value) {
+      scannerStatus.textContent = 'No QR code found in that photo. Try a closer, sharper image.';
+      return;
+    }
+    await handleScannedCode(value);
+  } catch (e) {
+    scannerStatus.textContent = 'Could not read that image. Try another photo or type the ticket number.';
+  } finally {
+    qrImageInput.value = '';
+  }
+}
+
 scanQrBtn.addEventListener('click', startScanner);
 scannerCloseBtn.addEventListener('click', stopScanner);
+qrImageInput.addEventListener('change', () => scanQrImageFile(qrImageInput.files && qrImageInput.files[0]));
 
 const checkInSerialBtn = document.getElementById('checkInSerialBtn');
 const checkInSerialError = document.getElementById('checkInSerialError');
