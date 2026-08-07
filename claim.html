@@ -168,11 +168,11 @@
     <p style="font-size:13px;font-weight:600;margin:14px 0 4px;">How many of each tier? <span style="font-weight:400;color:#555;">(total 1–<span id="maxBatchLabel">10</span>)</span></p>
     <div id="tierCountFields"></div>
     <label for="vOpenCount">No fixed tier <span style="font-weight:400;color:#555;">(recipient picks their own)</span></label>
-    <input type="number" id="vOpenCount" min="0" max="10" value="1">
+    <input type="number" id="vOpenCount" min="0" max="10" value="0">
 
-    <label for="vRecipientName">Recipient name <span style="font-weight:400;color:#555;">(only used if total = 1, not locked)</span></label>
+    <label for="vRecipientName">Recipient / distributor name <span style="font-weight:400;color:#555;">(recipient if total = 1; distributor if total &gt; 1)</span></label>
     <input type="text" id="vRecipientName">
-    <label for="vRecipientPhone">Recipient phone <span style="font-weight:400;color:#555;">(only used if total = 1, not locked)</span></label>
+    <label for="vRecipientPhone">Recipient / distributor phone <span style="font-weight:400;color:#555;">(used to address Text / WhatsApp after generation)</span></label>
     <input type="tel" id="vRecipientPhone">
 
     <div id="vChapterFieldWrap">
@@ -385,7 +385,7 @@ async function loadPageConfig() {
     // Fetch failed — defaults stay in place, nothing breaks.
   }
 }
-loadPageConfig();
+/* Page configuration is loaded in the bootstrap below before URL parameters are processed. */
 /* ========================================================= */
 
 const tierPicker = document.getElementById('tierPicker');
@@ -700,24 +700,31 @@ async function loadBatch(batchId) {
   }
 }
 
-const batchIdParam = new URLSearchParams(window.location.search).get('batch');
-const voucherIdParam = new URLSearchParams(window.location.search).get('voucher');
-if (batchIdParam) {
-  loadBatch(batchIdParam);
-  document.getElementById('refreshBatchBtn').addEventListener('click', (ev) => {
-    ev.target.disabled = true;
-    ev.target.textContent = 'Refreshing…';
-    loadBatch(batchIdParam).finally(() => {
-      ev.target.disabled = false;
-      ev.target.textContent = '↻ Refresh Status';
+(async function bootstrap() {
+  // Wait for live tiers/groups before trying to preselect a voucher's tier or
+  // chapter. This removes a race where voucher links could load before the
+  // dynamic controls existed.
+  await loadPageConfig();
+
+  const batchIdParam = new URLSearchParams(window.location.search).get('batch');
+  const voucherIdParam = new URLSearchParams(window.location.search).get('voucher');
+  if (batchIdParam) {
+    await loadBatch(batchIdParam);
+    document.getElementById('refreshBatchBtn').addEventListener('click', (ev) => {
+      ev.target.disabled = true;
+      ev.target.textContent = 'Refreshing…';
+      loadBatch(batchIdParam).finally(() => {
+        ev.target.disabled = false;
+        ev.target.textContent = '↻ Refresh Status';
+      });
     });
-  });
-} else if (voucherIdParam) {
-  applyVoucherParams(); // tab bar stays hidden — this is a dedicated claimant link, not general navigation
-} else {
-  tabBar.classList.add('visible');
-  showTab('claim');
-}
+  } else if (voucherIdParam) {
+    await applyVoucherParams(); // dedicated claimant link; admin tabs stay hidden
+  } else {
+    tabBar.classList.add('visible');
+    showTab('claim');
+  }
+})();
 
 /* -------- Claimant form submission -------- */
 form.addEventListener('submit', async (ev) => {
@@ -1096,17 +1103,60 @@ generateBtn.addEventListener('click', async () => {
       generateError.style.display = 'block';
     } else {
       const b = data.breakdown;
-      generateResult.innerHTML = `<strong>${data.count} voucher(s) ready:</strong><br>${data.distributorUrl}` +
-        `<br><br>Breakdown: ${Object.keys(b).filter(k => k !== 'open').map(k => `${b[k]} ${TIER_LABELS[k] ? TIER_LABELS[k].replace(/\s*\(.*\)/, '') : k}`).join(', ')}, ${b.open} no fixed tier.` +
+      const nonZeroParts = Object.keys(b)
+        .filter(k => k !== 'open' && Number(b[k]) > 0)
+        .map(k => `${b[k]} ${TIER_LABELS[k] ? TIER_LABELS[k].replace(/\s*\(.*\)/, '') : k}`);
+      if (Number(b.open) > 0) nonZeroParts.push(`${b.open} no fixed tier`);
+      const breakdownText = nonZeroParts.join(', ');
+      const contactName = (data.contactName || '').trim();
+      const contactPhone = (data.contactPhone || '').trim();
+      const safePhone = contactPhone.replace(/\D/g, '');
+      const waPhone = safePhone.length === 10 ? '1' + safePhone : safePhone;
+      const roleLabel = data.contactRole === 'distributor' ? 'Distributor' : 'Recipient';
+
+      generateResult.innerHTML = `<strong>${data.count} voucher(s) ready:</strong><br>` +
+        `<a href="${data.distributorUrl}" target="_blank" rel="noopener">${data.distributorUrl}</a>` +
+        `<br><br>Breakdown: ${breakdownText || 'No tier breakdown available.'}` +
         `<br><br>Issued by: ${data.issuedBy}` +
-        `<br><br><button type="button" id="shareGenBtn" style="padding:10px 18px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Share via Text / WhatsApp</button>` +
-        `<span id="shareGenFallback" style="display:none;font-size:12px;color:#8a8a8a;margin-left:8px;">Sharing isn't supported here — copy the link above instead.</span>`;
+        (contactName ? `<br>${roleLabel}: <strong>${contactName}</strong>` : '') +
+        (contactPhone ? ` — ${contactPhone}` : '') +
+        `<br><br><div style="display:flex;gap:8px;flex-wrap:wrap;">` +
+        `<button type="button" id="shareGenBtn" style="padding:10px 18px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Share</button>` +
+        (safePhone ? `<button type="button" id="textGenBtn" style="padding:10px 18px;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;font-weight:700;cursor:pointer;">Text ${contactName || 'Distributor'}</button>` : '') +
+        (safePhone ? `<button type="button" id="waGenBtn" style="padding:10px 18px;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;font-weight:700;cursor:pointer;">WhatsApp ${contactName || 'Distributor'}</button>` : '') +
+        `<button type="button" id="copyGenBtn" style="padding:10px 18px;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;font-weight:700;cursor:pointer;">Copy Link</button>` +
+        `</div><span id="shareGenFallback" style="display:none;font-size:12px;color:#8a8a8a;margin-top:8px;">Sharing isn't supported here. Use Text, WhatsApp, or Copy Link.</span>`;
       generateResult.style.display = 'block';
 
+      const message = `${contactName ? contactName + ', ' : ''}you have ${data.count} ticket voucher(s) for ${EVENT_CONFIG.EventTitle}. Open your distributor link: ${data.distributorUrl}`;
+
       document.getElementById('shareGenBtn').addEventListener('click', async () => {
-        const shareData = { title: `${EVENT_CONFIG.ChapterName} — Ticket Voucher(s)`, text: `You have ${data.count} ticket voucher(s) for ${EVENT_CONFIG.EventTitle}:`, url: data.distributorUrl };
-        if (navigator.share) { try { await navigator.share(shareData); } catch (e) { /* cancelled */ } }
-        else { document.getElementById('shareGenFallback').style.display = 'inline'; }
+        const shareData = { title: `${EVENT_CONFIG.ChapterName} — Ticket Voucher(s)`, text: message, url: data.distributorUrl };
+        if (navigator.share) {
+          try { await navigator.share(shareData); } catch (e) { /* cancelled */ }
+        } else {
+          document.getElementById('shareGenFallback').style.display = 'inline-block';
+        }
+      });
+
+      const textBtn = document.getElementById('textGenBtn');
+      if (textBtn) textBtn.addEventListener('click', () => {
+        // iOS Safari supports sms:number&body=... more reliably than ?body=...
+        window.location.href = `sms:${safePhone}&body=${encodeURIComponent(message)}`;
+      });
+
+      const waBtn = document.getElementById('waGenBtn');
+      if (waBtn) waBtn.addEventListener('click', () => {
+        window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`, '_blank');
+      });
+
+      document.getElementById('copyGenBtn').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(data.distributorUrl);
+          document.getElementById('copyGenBtn').textContent = 'Copied ✓';
+        } catch (e) {
+          window.prompt('Copy this distributor link:', data.distributorUrl);
+        }
       });
     }
   } catch (err) {
