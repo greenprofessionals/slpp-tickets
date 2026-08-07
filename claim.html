@@ -950,21 +950,24 @@ async function renderTicket(tier, serial, checkInToken) {
     wrapText(ctx, cfg.Tagline, textLeft, 168, stubX - textLeft - 40, 20);
   }
 
-  // ---- Date / Time / Venue row ----
-  const rowY = 230;
+  // ---- Event details: one field per line to prevent text overlap ----
+  const detailsY = 220;
+  const detailsMaxWidth = stubX - textLeft - 50;
+
   ctx.fillStyle = '#1a3fa0';
   ctx.font = '700 16px Segoe UI, sans-serif';
-  ctx.fillText('📅 ' + (cfg.EventDate || ''), textLeft, rowY);
-  ctx.fillText('🕕 ' + (cfg.EventTime || ''), textLeft + 260, rowY);
-  ctx.fillText('📍 ' + (cfg.VenueName || ''), textLeft + 420, rowY);
+  ctx.fillText('📅 ' + formatDisplayDate(cfg.EventDate), textLeft, detailsY);
+  ctx.fillText('🕕 ' + (cfg.EventTime || ''), textLeft, detailsY + 35);
+  ctx.fillText('📍 ' + (cfg.VenueName || ''), textLeft, detailsY + 70);
+
   ctx.font = '400 14px Segoe UI, sans-serif';
   ctx.fillStyle = '#333';
-  ctx.fillText(cfg.VenueAddress || '', textLeft + 420, rowY + 20);
+  wrapText(ctx, cfg.VenueAddress || '', textLeft, detailsY + 95, detailsMaxWidth, 19);
 
   if (cfg.DressCode) {
     ctx.fillStyle = '#000';
     ctx.font = '700 15px Segoe UI, sans-serif';
-    ctx.fillText('DRESS CODE: ' + cfg.DressCode.toUpperCase(), textLeft, rowY + 55);
+    ctx.fillText('DRESS CODE: ' + cfg.DressCode.toUpperCase(), textLeft, detailsY + 145);
   }
 
   // ---- Footer bar ----
@@ -1037,6 +1040,22 @@ function loadImage(src) {
     img.onerror = reject;
     img.src = src;
   });
+}
+
+
+function formatDisplayDate(value) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  }
+  return raw;
 }
 
 function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
